@@ -214,4 +214,3 @@ SELECT * FROM streaming_dev.gold.logs_enriquecidos LIMIT 10;
 **Paulo Roberto Albuquerque**
 Analista de Sistemas / Dados · em transição para Engenharia de Dados
 
-🔗 [LinkedIn](https://www.linkedin.com/in/SEU-PERFIL) · 💻 [GitHub](https://github.com/SEU-USUARIO)
