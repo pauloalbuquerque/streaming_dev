@@ -1,68 +1,217 @@
-# Projeto Streaming Dev
+# Streaming Dev — Pipeline de Dados com Arquitetura Medalhão
 
-Pipeline de dados de uma plataforma de streaming no Databricks, seguindo a arquitetura medalhão (bronze → silver → gold) com Unity Catalog.
+![Databricks](https://img.shields.io/badge/Databricks-FF3621?logo=databricks&logoColor=white)
+![PySpark](https://img.shields.io/badge/PySpark-E25A1C?logo=apachespark&logoColor=white)
+![Delta Lake](https://img.shields.io/badge/Delta_Lake-00ADD8?logo=delta&logoColor=white)
+![Unity Catalog](https://img.shields.io/badge/Unity_Catalog-1B3139)
+![Status](https://img.shields.io/badge/status-concluído-brightgreen)
+
+Pipeline de dados end-to-end de uma plataforma de streaming, construído no **Databricks** com **PySpark**, **Delta Lake** e **Unity Catalog**, seguindo a **arquitetura medalhão** (bronze → silver → gold).
+
+O projeto transforma arquivos CSV brutos e inconsistentes em uma tabela analítica confiável, pronta para consumo por times de análise e BI.
+
+---
+
+## Sumário
+
+- [Visão geral](#visão-geral)
+- [Arquitetura](#arquitetura)
+- [Fontes de dados](#fontes-de-dados)
+- [Estrutura do projeto](#estrutura-do-projeto)
+- [Camadas](#camadas)
+  - [Bronze](#-bronze--ingestão)
+  - [Silver](#-silver--limpeza-e-padronização)
+  - [Gold](#-gold--enriquecimento-e-agregação)
+- [Decisões de design e boas práticas](#decisões-de-design-e-boas-práticas)
+- [Stack tecnológica](#stack-tecnológica)
+- [Como executar](#como-executar)
+- [Autor](#autor)
+
+---
 
 ## Visão geral
 
-O projeto processa três fontes de dados — logs de visualização, catálogo de filmes e cadastro de usuários — em camadas progressivas de qualidade: dados brutos na bronze, dados limpos e padronizados na silver, e dados enriquecidos/agregados na gold para análise e BI.
+O pipeline processa três fontes de dados — **logs de visualização**, **catálogo de filmes** e **cadastro de usuários** — em camadas progressivas de qualidade:
 
-## Estrutura
+| Camada | Objetivo | Resultado |
+| --- | --- | --- |
+| 🥉 **Bronze** | Ingerir os dados exatamente como chegam, com rastreabilidade | 3 tabelas brutas |
+| 🥈 **Silver** | Limpar, padronizar e tipar os dados | 3 tabelas limpas |
+| 🥇 **Gold** | Enriquecer e agregar para análise e BI | 1 tabela analítica |
 
-| Asset | Papel |
-| --- | --- |
-| `inicio` (notebook) | Setup do catálogo, schemas e volume + ingestão da camada bronze |
-| `silver` (notebook) | Limpeza, padronização e gravação das tabelas silver |
-| `gold` (notebook) | Agregações, enriquecimento (joins) e gravação da tabela gold |
-| Volume `streaming_dev.bronze_ingestao.raw_files` | CSVs brutos de origem (logs_streaming.csv, catalogo_filmes.csv, usuarios.csv) |
+## Arquitetura
+
+```mermaid
+flowchart LR
+    subgraph Origem["Volume raw_files"]
+        A1[logs_streaming.csv]
+        A2[catalogo_filmes.csv]
+        A3[usuarios.csv]
+    end
+
+    subgraph Bronze["🥉 Bronze · bronze_ingestao"]
+        B1[(logs_streaming)]
+        B2[(catalogo_filmes)]
+        B3[(usuarios)]
+    end
+
+    subgraph Silver["🥈 Silver · silver"]
+        S1[(logs_streaming)]
+        S2[(catalogo_filmes)]
+        S3[(usuarios)]
+    end
+
+    subgraph Gold["🥇 Gold · gold"]
+        G1[(logs_enriquecidos)]
+    end
+
+    A1 --> B1 --> S1 --> G1
+    A2 --> B2 --> S2 --> G1
+    A3 --> B3 --> S3 --> G1
+```
+
+Todas as camadas vivem no catálogo `streaming_dev`, governado pelo Unity Catalog.
+
+## Fontes de dados
+
+| Arquivo | Conteúdo | Linhas (bronze) |
+| --- | --- | ---: |
+| `logs_streaming.csv` | Logs de visualização (sessões de reprodução) | 1.007 |
+| `catalogo_filmes.csv` | Catálogo de filmes | 62 |
+| `usuarios.csv` | Cadastro de usuários | 82 |
+
+Os arquivos ficam no volume `streaming_dev.bronze_ingestao.raw_files`.
+
+## Estrutura do projeto
+
+| Asset | Tipo | Responsabilidade |
+| --- | --- | --- |
+| `inicio` | Notebook | Setup do catálogo, schemas e volume + ingestão da camada bronze |
+| `silver` | Notebook | Limpeza, padronização e gravação das tabelas silver |
+| `gold` | Notebook | Agregações, enriquecimento (joins) e gravação da tabela gold |
+| `streaming_dev.bronze_ingestao.raw_files` | Volume | CSVs brutos de origem |
+
+---
 
 ## Camadas
 
-### Bronze — schema `streaming_dev.bronze_ingestao`
+### 🥉 Bronze — Ingestão
 
-Criada no notebook `inicio`:
+**Schema:** `streaming_dev.bronze_ingestao` · **Notebook:** `inicio`
 
-* Criação do catálogo `streaming_dev` e dos schemas `bronze_ingestao`, `silver` e `gold`, todos com comentários descritivos.
-* Volume `raw_files` com os CSVs brutos.
-* Função `ingest_bronze()` que lê cada CSV (com `multiLine` e `escape`) e grava nas tabelas bronze adicionando colunas de rastreabilidade: `ingest_timestamp` e `source_file`.
-* Tabelas: `logs_streaming` (1007 linhas), `catalogo_filmes` (62), `usuarios` (82).
+- Criação do catálogo `streaming_dev` e dos schemas `bronze_ingestao`, `silver` e `gold`, todos com comentários descritivos.
+- Criação do volume `raw_files`, que armazena os CSVs de origem.
+- Função `ingest_bronze()`: lê cada CSV (com as opções `multiLine` e `escape`) e grava a tabela bronze correspondente.
+- **Rastreabilidade:** cada registro recebe as colunas `ingest_timestamp` (quando foi ingerido) e `source_file` (de qual arquivo veio).
 
-### Silver — schema `streaming_dev.silver`
+| Tabela | Linhas |
+| --- | ---: |
+| `logs_streaming` | 1.007 |
+| `catalogo_filmes` | 62 |
+| `usuarios` | 82 |
 
-Notebook `silver`: lê as tabelas bronze com `spark.table()` (mantendo as colunas de rastreabilidade `ingest_timestamp`/`source_file`) e grava tabelas Delta gerenciadas com o mesmo nome. As transformações seguem o princípio de **uma função por DataFrame** (`transformar_logs`, `transformar_catalogo`, `transformar_usuarios`) usando helpers compartilhados:
+### 🥈 Silver — Limpeza e padronização
 
-* `padronizar_data(df, coluna, formatos)` — converte strings para `date` tentando múltiplos formatos com `coalesce` de `try_to_date`; valores inválidos viram `null` em vez de erro. O `signup_date` chega em 3 formatos mistos (`yyyy-MM-dd`, `MM-dd-yyyy`, `dd/MM/yyyy`).
-* `padronizar_texto(df, coluna)` — minúsculas sem espaços/hífens/underscores (`Smart_TV` → `smarttv`); aplicado em `content_type` e `subscription_type`.
-* `padronizar_generos` / `padronizar_paises` — lookup via `create_map` (Terror → Horror; BR/Brasil → Brazil), valores não mapeados permanecem inalterados.
-* `padronizar_devices` — formas canônicas (mobile → Mobile, smart tv → Smart TV).
-* Nos logs: `playback_status` em minúsculas, `watch_time_minutes` convertido com `try_cast` (tratando o valor 'zero'), colunas calculadas `watch_time_hours` e `watch_categories` (Curto < 120 min; Longo 120–180; Muito longo > 180).
-* Gravação com `mode("overwrite")` + `option("overwriteSchema", "true")`.
+**Schema:** `streaming_dev.silver` · **Notebook:** `silver`
 
-### Gold — schema `streaming_dev.gold`
+Lê as tabelas bronze com `spark.table()` e grava tabelas Delta gerenciadas com o mesmo nome, mantendo as colunas de rastreabilidade.
 
-Notebook `gold`:
+As transformações seguem o princípio de **uma função por DataFrame** (`transformar_logs`, `transformar_catalogo`, `transformar_usuarios`), compostas a partir de helpers reutilizáveis:
 
-* Lê as tabelas silver com `spark.table()` e produz agregações por `subscription_type` e `country` (sessões, média e total de minutos assistidos).
-* Enriquecimento: logs ⋈ catálogo (`movie_id`) ⋈ usuários (`user_id`), ambos left joins. As colunas de usuário que colidem com as dos logs são renomeadas (`user_country`, `user_subscription_type`), e as colunas de rastreabilidade (`ingest_timestamp`/`source_file`) — que permanecem nas camadas bronze/silver — são descartadas dos três lados antes dos joins.
-* Tabela final `streaming_dev.gold.logs_enriquecidos` (Delta gerenciada, 23 colunas — apenas dados de negócio; a rastreabilidade por origem permanece nas camadas bronze/silver).
+| Helper | O que faz | Exemplo |
+| --- | --- | --- |
+| `padronizar_data(df, coluna, formatos)` | Converte strings para `date` testando múltiplos formatos com `coalesce` de `try_to_date`; valores inválidos viram `null` | `signup_date` chega em `yyyy-MM-dd`, `MM-dd-yyyy` e `dd/MM/yyyy` |
+| `padronizar_texto(df, coluna)` | Minúsculas, sem espaços, hífens ou underscores; aplicado em `content_type` e `subscription_type` | `Smart_TV` → `smarttv` |
+| `padronizar_generos` / `padronizar_paises` | Lookup via `create_map`; valores não mapeados permanecem inalterados | `Terror` → `Horror`; `BR` / `Brasil` → `Brazil` |
+| `padronizar_devices` | Converte para as formas canônicas | `mobile` → `Mobile`; `smart tv` → `Smart TV` |
 
-## Boas práticas aplicadas
+**Tratamentos específicos da tabela de logs:**
 
-* **Arquitetura medalhão** com responsabilidade clara de cada camada (bruto → tratado → analisável).
-* **Fonte única de ingestão**: o volume raw_files é lido apenas pelo notebook `inicio`; o silver consome as tabelas bronze.
-* **Tabelas Delta gerenciadas** no Unity Catalog — ACID, time travel, evolução de schema e consulta via SQL — em vez de arquivos Parquet soltos.
-* **Funções puras e reutilizáveis** que recebem e retornam DataFrames, componíveis com `.transform()`.
-* **Uma função de transformação por DataFrame** — sem ramificações frágeis por presença de colunas.
-* **Robustez contra dados sujos**: `try_to_date`/`try_cast` produzem `null` em vez de quebrar o pipeline.
-* **Configuração fora do código**: thresholds e mapeamentos são constantes declaradas no topo do notebook.
-* **Rastreabilidade**: colunas `ingest_timestamp` e `source_file` indicam quando e de qual arquivo cada dado veio; são criadas na bronze e persistem até a silver.
-* **Nomenclatura e estilo consistentes**: prefixos `padronizar_*`/`transformar_*`, type hints e docstrings em todas as funções.
-* **Prevenção de ambiguidade em joins**: colunas duplicadas renomeadas antes de unir.
+- `playback_status` convertido para minúsculas.
+- `watch_time_minutes` convertido com `try_cast`, tratando valores sujos como `'zero'`.
+- Colunas calculadas:
+  - `watch_time_hours`
+  - `watch_categories`, classificando a sessão pelo tempo assistido:
 
+| Categoria | Critério |
+| --- | --- |
+| Curto | menos de 120 min |
+| Longo | de 120 a 180 min |
+| Muito longo | mais de 180 min |
+
+**Gravação:** `mode("overwrite")` + `option("overwriteSchema", "true")`.
+
+### 🥇 Gold — Enriquecimento e agregação
+
+**Schema:** `streaming_dev.gold` · **Notebook:** `gold`
+
+**Agregações:** lê as tabelas silver com `spark.table()` e produz métricas por `subscription_type` e `country` (número de sessões, média e total de minutos assistidos).
+
+**Enriquecimento:** `logs ⋈ catálogo` (chave `movie_id`) `⋈ usuários` (chave `user_id`), ambos com `left join`.
+
+- Colunas de usuário que colidem com as dos logs são renomeadas (`user_country`, `user_subscription_type`) para evitar ambiguidade.
+- As colunas de rastreabilidade (`ingest_timestamp` e `source_file`) são descartadas dos três lados antes dos joins; a rastreabilidade por origem permanece nas camadas bronze e silver.
+
+**Tabela final:** `streaming_dev.gold.logs_enriquecidos` — Delta gerenciada, com 23 colunas contendo apenas dados de negócio.
+
+---
+
+## Decisões de design e boas práticas
+
+| Prática | Como foi aplicada |
+| --- | --- |
+| **Arquitetura medalhão** | Responsabilidade clara por camada: bruto → tratado → analisável |
+| **Fonte única de ingestão** | O volume `raw_files` é lido apenas pelo notebook `inicio`; o silver consome as tabelas bronze |
+| **Tabelas Delta gerenciadas** | ACID, time travel, evolução de schema e consulta via SQL no Unity Catalog, em vez de arquivos Parquet soltos |
+| **Funções puras e reutilizáveis** | Recebem e retornam DataFrames, componíveis com `.transform()` |
+| **Uma função por DataFrame** | Sem ramificações frágeis por presença de colunas |
+| **Robustez contra dados sujos** | `try_to_date` e `try_cast` produzem `null` em vez de quebrar o pipeline |
+| **Configuração fora da lógica** | Thresholds e mapeamentos declarados como constantes no topo do notebook |
+| **Rastreabilidade** | `ingest_timestamp` e `source_file` indicam quando e de qual arquivo cada dado veio; são criadas na bronze e persistem até a silver |
+| **Nomenclatura e estilo consistentes** | Prefixos `padronizar_*` e `transformar_*`, type hints e docstrings em todas as funções |
+| **Prevenção de ambiguidade em joins** | Colunas duplicadas renomeadas antes de unir |
+| **Idempotência** | Gravação com `overwrite`: reexecutar um notebook refaz as tabelas da camada sem duplicar dados |
+
+## Stack tecnológica
+
+- **Plataforma:** Databricks
+- **Processamento:** PySpark / Spark SQL
+- **Armazenamento:** Delta Lake
+- **Governança:** Unity Catalog (catálogo, schemas e volumes)
+- **Padrão arquitetural:** Medallion Architecture
 
 ## Como executar
 
-1. `inicio` — setup (uma vez) e ingestão bronze.
-2. `silver` — transforma e grava as tabelas silver.
-3. `gold` — agrega, enriquece e grava `streaming_dev.gold.logs_enriquecidos`.
+### Pré-requisitos
 
-Reexecutar qualquer notebook refaz as tabelas da sua camada (gravação com `overwrite`).
+- Workspace Databricks com **Unity Catalog** habilitado.
+- Permissão para criar catálogo, schemas e volumes.
+- Compute com runtime recente do Databricks (necessário para `try_to_date` e `try_cast`).
+- Os três arquivos CSV de origem.
+
+### Passo a passo
+
+| # | Notebook | O que faz |
+| :-: | --- | --- |
+| 1 | `inicio` | Cria catálogo, schemas e volume; ingere os CSVs na camada bronze |
+| 2 | `silver` | Transforma os dados e grava as tabelas silver |
+| 3 | `gold` | Agrega, enriquece e grava `streaming_dev.gold.logs_enriquecidos` |
+
+> **Atenção:** o notebook `inicio` cria o volume `raw_files`. Se ele ainda não contiver os CSVs, faça o upload dos três arquivos antes da etapa de ingestão.
+
+Execute os notebooks **em ordem**. Reexecutar qualquer um deles refaz as tabelas da sua camada (gravação com `overwrite`).
+
+### Consultando o resultado
+
+```sql
+SELECT * FROM streaming_dev.gold.logs_enriquecidos LIMIT 10;
+```
+
+---
+
+## Autor
+
+**Paulo Roberto Albuquerque**
+Analista de Sistemas / Dados · em transição para Engenharia de Dados
+
+🔗 [LinkedIn](https://www.linkedin.com/in/SEU-PERFIL) · 💻 [GitHub](https://github.com/SEU-USUARIO)
